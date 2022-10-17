@@ -51,7 +51,7 @@ module Cardano.Api.LedgerState
   where
 
 import           Prelude
-
+import           Debug.Trace
 import           Control.Exception
 import           Control.Monad (when)
 import           Control.Monad.Trans.Class
@@ -1460,7 +1460,7 @@ isLeadingSlotsPraos slotRangeOfInterest poolid snapshotPoolDistr eNonce vrfSkey 
     ShelleyAPI.individualPoolStake <$> Map.lookup poolHash snapshotPoolDistr
 
   let isLeader slotNo = checkLeaderNatValue certifiedNatValue stakePoolStake activeSlotCoeff'
-        where rho = VRF.evalCertified () (mkInputVRF slotNo eNonce) vrfSkey
+        where rho = VRF.evalCertified () (mkInputVRF (trace("slot: " ++ show slotNo) $ slotNo) eNonce) vrfSkey
               certifiedNatValue = vrfLeaderValue (Proxy @Shelley.StandardCrypto) rho
 
   Right $ Set.filter isLeader slotRangeOfInterest
