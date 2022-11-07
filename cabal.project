@@ -148,3 +148,14 @@ source-repository-package
   tag: 4ec92ded05ccf59ba4a874be4b404ac1b6d666b6
   --sha256: 00fvvaf4ir4hskq4a6gggbh2wmdvy8j8kn6s4m1p1vlh8m8mq514
 
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-network.git
+  tag: 217d52cc4f82b4453748b3dfd5e9a5066a0c9248
+  subdir: ouroboros-network
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-network.git
+  tag: 217d52cc4f82b4453748b3dfd5e9a5066a0c9248
+  subdir: ouroboros-consensus-cardano
