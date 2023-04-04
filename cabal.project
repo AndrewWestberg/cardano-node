@@ -177,3 +177,15 @@ source-repository-package
   location: https://github.com/denisshevchenko/threepenny-gui
   tag: 4ec92ded05ccf59ba4a874be4b404ac1b6d666b6
   --sha256: 00fvvaf4ir4hskq4a6gggbh2wmdvy8j8kn6s4m1p1vlh8m8mq514
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-network.git
+  tag: 64a7851ec24def4cf66f410820c8704a642340ab
+  subdir: ouroboros-network
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-network.git
+  tag: 64a7851ec24def4cf66f410820c8704a642340ab
+  subdir: ouroboros-consensus-cardano
