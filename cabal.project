@@ -107,3 +107,15 @@ package snap-server
 -- IMPORTANT
 -- Do NOT add more source-repository-package stanzas here unless they are strictly
 -- temporary! Please read the section in CONTRIBUTING about updating dependencies.
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 4a5a4c1139585361187789398a51098a9cdaeb20
+  subdir: ouroboros-consensus
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 4a5a4c1139585361187789398a51098a9cdaeb20
+  subdir: ouroboros-consensus-cardano
