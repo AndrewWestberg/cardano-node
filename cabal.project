@@ -63,3 +63,15 @@ constraints:
 -- temporary! Please read the section in CONTRIBUTING about updating dependencies.
 
 -- `smtp-mail` should depend on `crypton-connection` rather than `connection`!
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 9fb52b4167ee7caa046b96ff4c8fb49de1aa9174
+  subdir: ouroboros-consensus
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 9fb52b4167ee7caa046b96ff4c8fb49de1aa9174
+  subdir: ouroboros-consensus-cardano
