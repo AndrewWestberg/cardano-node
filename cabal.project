@@ -60,3 +60,15 @@ package plutus-scripts-bench
 -- temporary! Please read the section in CONTRIBUTING about updating dependencies.
 
 -- `smtp-mail` should depend on `crypton-connection` rather than `connection`!
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 4f04d18b605591fc5508c6c33788afce387bf038
+  subdir: ouroboros-consensus
+
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 4f04d18b605591fc5508c6c33788afce387bf038
+  subdir: ouroboros-consensus-cardano
