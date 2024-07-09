@@ -64,3 +64,17 @@ allow-newer: katip:Win32
 -- IMPORTANT
 -- Do NOT add more source-repository-package stanzas here unless they are strictly
 -- temporary! Please read the section in CONTRIBUTING about updating dependencies.
+
+-- release-ouroboros-consensus-0.20.0.0
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 036529dee9fffe363295a35f086b722b40418eb9
+  subdir: ouroboros-consensus
+
+-- release-ouroboros-consensus-cardano-0.18.0.0
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 036529dee9fffe363295a35f086b722b40418eb9
+  subdir: ouroboros-consensus-cardano
