@@ -89,6 +89,13 @@ allow-newer:
 -- Do NOT add more source-repository-package stanzas here unless they are strictly
 -- temporary! Please read the section in CONTRIBUTING about updating dependencies.
 
+-- for 10.7.1
+-- release-ouroboros-consensus-3.0.1.0
+source-repository-package
+  type: git
+  location: git@bitbucket.org:muamw10/ouroboros-consensus.git
+  tag: 84f92fb084c272eac4f19b0d09be7b9891ff7b39
+
 if impl(ghc >= 9.12)
   -- GHC 9.12 support - master branch
   source-repository-package
