@@ -87,6 +87,8 @@ library
                         Cardano.Node.Protocol.Conway
                         Cardano.Node.Protocol.Dijkstra
                         Cardano.Node.Protocol.Shelley
+                        Cardano.Node.Protocol.Shelley.Credentials
+                        Cardano.Node.Protocol.Shelley.KesForge
                         Cardano.Node.Protocol.Types
                         Cardano.Node.Queries
                         Cardano.Node.Run
@@ -199,6 +201,7 @@ library
                       , transformers
                       , transformers-except
                       , typed-protocols:{typed-protocols, stateful} >= 1.2
+                      , vector
                       , yaml
 
 executable cardano-node
@@ -236,6 +239,7 @@ test-suite cardano-node-test
                       , cardano-crypto-class
                       , cardano-crypto-wrapper
                       , cardano-api
+                      , cardano-protocol-tpraos
                       , cardano-rpc
                       , cardano-diffusion:{api, cardano-diffusion, orphan-instances}
                       , cardano-node
@@ -250,8 +254,9 @@ test-suite cardano-node-test
                       , hedgehog-extras ^>= 0.10
                       , iproute
                       , mtl
-                      , ouroboros-consensus:{ouroboros-consensus, diffusion}
+                      , ouroboros-consensus:{ouroboros-consensus, cardano, diffusion, protocol}
                       , ouroboros-network:{api, framework, ouroboros-network}
+                      , optparse-applicative
                       , text
                       , trace-dispatcher
                       , transformers
@@ -262,7 +267,9 @@ test-suite cardano-node-test
                         Test.Cardano.Node.FilePermissions
                         Test.Cardano.Node.Gen
                         Test.Cardano.Node.Json
+                        Test.Cardano.Node.KesForgeCredentials
                         Test.Cardano.Node.POM
+                        Test.Cardano.Node.KesForgeTelemetry
                         Test.Cardano.Node.TopLevel
                         Test.Cardano.Tracing.NewTracing.Consistency
 

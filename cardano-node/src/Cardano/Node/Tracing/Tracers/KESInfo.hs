@@ -180,6 +180,12 @@ instance LogFormatting HotKey.KESEvolutionError where
       , "kesInfo" .= forMachine dtal kesInfo
       , "targetPeriod" .= targetPeriod
       ]
+  forMachine dtal (HotKey.KESExternalEvolutionError kesInfo targetPeriod) =
+    mconcat
+      [ "kind" .= String "KESExternalEvolutionError"
+      , "kesInfo" .= forMachine dtal kesInfo
+      , "targetPeriod" .= targetPeriod
+      ]
 
 
 

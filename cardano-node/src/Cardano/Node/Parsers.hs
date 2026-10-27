@@ -400,6 +400,13 @@ parseKesSourceFilePath = asum
             <> help "Path to the KES Agent socket"
             <> completer (bashCompleter "file")
         )
+  , KESForgeConfigPath <$>
+      strOption
+        ( long "shelley-kes-forge-config"
+            <> metavar "FILEPATH"
+            <> help "Path to a cardano-kes-forge pool connection file."
+            <> completer (bashCompleter "file")
+        )
   ]
 
 parseVrfKeyFilePath :: Parser FilePath

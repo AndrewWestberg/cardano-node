@@ -1341,6 +1341,12 @@ instance ( tx ~ GenTx blk
       [ "kind" .= String "TraceNodeIsLeader"
       , "slot" .= toJSON (unSlotNo slotNo)
       ]
+  forMachine _dtal (TraceForgeBlockError slotNo reason) =
+    mconcat
+      [ "kind" .= String "TraceForgeBlockError"
+      , "slot" .= toJSON (unSlotNo slotNo)
+      , "reason" .= String (showT reason)
+      ]
   forMachine dtal (TraceForgeTickedLedgerState slotNo prevPt) =
     mconcat
       [ "kind" .= String "TraceForgeTickedLedgerState"
@@ -1453,6 +1459,11 @@ instance ( tx ~ GenTx blk
       "Not leading slot " <> showT (unSlotNo slotNo)
   forHuman (TraceNodeIsLeader slotNo) =
       "Leading slot " <> showT (unSlotNo slotNo)
+  forHuman (TraceForgeBlockError slotNo reason) =
+      "Forging stopped before block submission in slot "
+        <> showT (unSlotNo slotNo)
+        <> ", reason: "
+        <> showT reason
   forHuman (TraceForgeTickedLedgerState slotNo prevPt) =
       "While forging in slot "
         <> showT (unSlotNo slotNo)
@@ -1523,6 +1534,8 @@ instance ( tx ~ GenTx blk
     [CounterM "Forge.node-not-leader" Nothing]
   asMetrics (TraceNodeIsLeader _slot) =
     [CounterM "Forge.node-is-leader" Nothing]
+  asMetrics TraceForgeBlockError {} =
+    [CounterM "Forge.signing-failure" Nothing]
   asMetrics TraceForgeTickedLedgerState {} = []
   asMetrics TraceForgingMempoolSnapshot {} = []
   asMetrics (TraceForgedBlock slot _ _ _ _) =
@@ -1562,6 +1575,8 @@ instance MetaTrace (TraceForgeEvent blk) where
     Namespace [] ["NodeNotLeader"]
   namespaceFor TraceNodeIsLeader {} =
     Namespace [] ["NodeIsLeader"]
+  namespaceFor TraceForgeBlockError {} =
+    Namespace [] ["ForgeBlockError"]
   namespaceFor TraceForgeTickedLedgerState {} =
     Namespace [] ["ForgeTickedLedgerState"]
   namespaceFor TraceForgingMempoolSnapshot {} =
@@ -1589,6 +1604,7 @@ instance MetaTrace (TraceForgeEvent blk) where
   severityFor (Namespace _ ["NodeCannotForge"]) _ = Just Error
   severityFor (Namespace _ ["NodeNotLeader"]) _ = Just Info
   severityFor (Namespace _ ["NodeIsLeader"]) _ = Just Info
+  severityFor (Namespace _ ["ForgeBlockError"]) _ = Just Error
   severityFor (Namespace _ ["ForgeTickedLedgerState"]) _ = Just Debug
   severityFor (Namespace _ ["ForgingMempoolSnapshot"]) _ = Just Debug
   severityFor (Namespace _ ["ForgedBlock"]) _ = Just Info
@@ -1626,6 +1642,8 @@ instance MetaTrace (TraceForgeEvent blk) where
     [("Forge.node-not-leader", "")]
   metricsDocFor (Namespace _ ["NodeIsLeader"]) =
     [("Forge.node-is-leader", "")]
+  metricsDocFor (Namespace _ ["ForgeBlockError"]) =
+    [("Forge.signing-failure", "External KES signing failures before block submission")]
   metricsDocFor (Namespace _ ["ForgeTickedLedgerState"]) = []
   metricsDocFor (Namespace _ ["ForgingMempoolSnapshot"]) = []
   metricsDocFor (Namespace _ ["ForgedBlock"]) =
@@ -1744,6 +1762,8 @@ instance MetaTrace (TraceForgeEvent blk) where
     , "  The node will soon forge; it is about to read its transactions from the"
     , "  Mempool. This will be followed by ForgedBlock."
     ]
+  documentFor (Namespace _ ["ForgeBlockError"]) = Just
+    "Operational KES signing failed; no block was submitted to ChainDB."
   documentFor (Namespace _ ["ForgeTickedLedgerState"]) = Just ""
   documentFor (Namespace _ ["ForgingMempoolSnapshot"]) = Just ""
   documentFor (Namespace _ ["ForgedBlock"]) = Just $ mconcat
@@ -1794,6 +1814,7 @@ instance MetaTrace (TraceForgeEvent blk) where
     , Namespace [] ["NodeCannotForge"]
     , Namespace [] ["NodeNotLeader"]
     , Namespace [] ["NodeIsLeader"]
+    , Namespace [] ["ForgeBlockError"]
     , Namespace [] ["ForgeTickedLedgerState"]
     , Namespace [] ["ForgingMempoolSnapshot"]
     , Namespace [] ["ForgedBlock"]

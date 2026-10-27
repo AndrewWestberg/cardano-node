@@ -19,6 +19,8 @@ module Cardano.Node.Protocol.Shelley
   , readGenesis
   , readGenesisAny
   , readLeaderCredentials
+  , readLeaderCredentialsForGenesis
+  , validateCredentialIdentities
   , genesisHashToPraosNonce
   , validateGenesis
   , checkExpectedGenesisHash
@@ -28,11 +30,13 @@ import           Cardano.Api hiding (FileError)
 import qualified Cardano.Api as Api
 import           Cardano.Api.Experimental.Certificate (OperationalCertificate (..), getHotKey)
 
-import qualified Cardano.Crypto.Hash.Class as Crypto
+import qualified Cardano.Crypto.Hash as Crypto
 import           Cardano.Ledger.BaseTypes (ProtVer (..), natVersion)
 import           Cardano.Ledger.Keys (coerceKeyRole)
 import qualified Cardano.Ledger.Shelley.Genesis as Shelley
 import           Cardano.Node.Orphans ()
+import Cardano.Node.Protocol.Shelley.Credentials
+import Cardano.Node.Protocol.Shelley.KesForge
 import           Cardano.Node.Protocol.Types
 import           Cardano.Node.Tracing.Era.HardFork ()
 import           Cardano.Node.Tracing.Era.Shelley ()
@@ -40,6 +44,7 @@ import           Cardano.Node.Tracing.Formatting ()
 import           Cardano.Node.Tracing.Tracers.ChainDB ()
 import           Cardano.Node.Types
 import qualified Ouroboros.Consensus.Cardano as Consensus
+import qualified Ouroboros.Consensus.Protocol.KesForge.Client as KesForge
 import           Ouroboros.Consensus.HardFork.Combinator.AcrossEras ()
 import           Ouroboros.Consensus.Protocol.Praos.Common (PraosCanBeLeader (..),
                    PraosCredentialsSource (..))
@@ -50,9 +55,10 @@ import           Control.Exception (IOException)
 import           Control.Monad
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import           System.Directory (getFileSize)
-import           System.FilePath (takeDirectory)
+import System.FilePath (isAbsolute, normalise, takeDirectory, (</>))
 import           System.FS.API (SomeHasFS (..))
 import           System.FS.API.Types (MountPoint (MountPoint))
 import           System.FS.IO (ioHasFS)
@@ -83,7 +89,7 @@ mkSomeConsensusProtocolShelley NodeShelleyProtocolConfiguration {
                                           npcShelleyGenesisFileHash
     firstExceptT GenesisValidationError $ validateGenesis genesis
     leaderCredentials <- firstExceptT PraosLeaderCredentialsError $
-                         readLeaderCredentials files
+                         readLeaderCredentialsForGenesis genesis genesisHash files
 
     -- Filesystem rooted at the Shelley genesis directory, used by the ledger to
     -- read initial funds/staking injected from genesis (testnets only).
@@ -158,58 +164,113 @@ validateGenesis genesis =
     firstExceptT GenesisValidationErrors . hoistEither $
       Shelley.validateGenesis genesis
 
+data LoadedCredential = LoadedCredential
+  { loadedPoolId :: !BS.ByteString
+  , loadedIsDeviceBacked :: !Bool
+  , loadedCredential :: !(ShelleyLeaderCredentials StandardCrypto)
+  }
+
 readLeaderCredentials
   :: Maybe ProtocolFilepaths
   -> ExceptT PraosLeaderCredentialsError IO [ShelleyLeaderCredentials StandardCrypto]
-readLeaderCredentials Nothing = return []
-readLeaderCredentials (Just pfp) =
-  -- The set of credentials is a sum total of what comes from the CLI,
-  -- as well as what's in the bulk credentials file.
-  (<>) <$> readLeaderCredentialsSingleton pfp
-       <*> readLeaderCredentialsBulk      pfp
+readLeaderCredentials = readLeaderCredentialsWithBinding Nothing
 
-readLeaderCredentialsSingleton ::
-     ProtocolFilepaths ->
-     ExceptT PraosLeaderCredentialsError IO
-             [ShelleyLeaderCredentials StandardCrypto]
--- It's OK to supply none of the files on the CLI
+readLeaderCredentialsForGenesis
+  :: ShelleyGenesis
+  -> GenesisHash
+  -> Maybe ProtocolFilepaths
+  -> ExceptT PraosLeaderCredentialsError IO [ShelleyLeaderCredentials StandardCrypto]
+readLeaderCredentialsForGenesis genesis genesisHash =
+  readLeaderCredentialsWithBinding $ Just $ expectedNetworkBinding genesis genesisHash
+
+readLeaderCredentialsWithBinding
+  :: Maybe KesForge.NetworkBinding
+  -> Maybe ProtocolFilepaths
+  -> ExceptT PraosLeaderCredentialsError IO [ShelleyLeaderCredentials StandardCrypto]
+readLeaderCredentialsWithBinding _ Nothing = return []
+readLeaderCredentialsWithBinding expectedBinding (Just pfp) = do
+  loaded <-
+    (<>)
+      <$> readLeaderCredentialsSingleton expectedBinding pfp
+      <*> readLeaderCredentialsBulk expectedBinding pfp
+  hoistEither $
+    validateCredentialIdentities $
+      fmap (\credential -> (loadedPoolId credential, loadedIsDeviceBacked credential)) loaded
+  pure $ fmap loadedCredential loaded
+
+validateCredentialIdentities
+  :: [(BS.ByteString, Bool)]
+  -> Either PraosLeaderCredentialsError ()
+validateCredentialIdentities credentials = do
+  let poolIds = fmap fst credentials
+      deviceBackedCount = length $ filter snd credentials
+  when (Set.size (Set.fromList poolIds) /= length poolIds) $
+    Left DuplicatePoolIdentity
+  when (deviceBackedCount > 32) $
+    Left TooManyDeviceCredentials
+
+expectedNetworkBinding :: ShelleyGenesis -> GenesisHash -> KesForge.NetworkBinding
+expectedNetworkBinding genesis (GenesisHash genesisHash) =
+  KesForge.NetworkBinding
+    { KesForge.networkMagic = fromIntegral $ Shelley.sgNetworkMagic genesis
+    , KesForge.shelleyGenesisDigest = Crypto.hashToBytes genesisHash
+    , KesForge.slotsPerKESPeriod = Shelley.sgSlotsPerKESPeriod genesis
+    , KesForge.maxKESEvolutions = Shelley.sgMaxKESEvolutions genesis
+    }
+
 readLeaderCredentialsSingleton
-   ProtocolFilepaths
-     { shelleyCertFile      = Nothing,
-       shelleyVRFFile       = Nothing,
-       shelleyKESSource     = Nothing
-     } = pure []
--- Or to supply all of the files
+  :: Maybe KesForge.NetworkBinding
+  -> ProtocolFilepaths
+  -> ExceptT PraosLeaderCredentialsError IO [LoadedCredential]
 readLeaderCredentialsSingleton
-  ProtocolFilepaths { shelleyCertFile = Just opCertFile,
-                      shelleyVRFFile = Just vrfFile,
-                      shelleyKESSource = Just kesSource
-                    } = do
-    vrfSKey <-
-      firstExceptT FileError (newExceptT $ readFileTextEnvelope (File vrfFile))
-
-    (credentialsSource, vkey) <- case kesSource of
-      KESKeyFilePath kesFile -> do
-        (OperationalCertificate opCert vkey, KesSigningKey kesKey) <-
-          opCertKesKeyCheck (File kesFile) (File opCertFile)
-        pure (PraosCredentialsUnsound opCert kesKey, vkey)
-
-      -- TODO: minor yikes: when we're using an agent, we don't check that the
-      -- opcert and the key provided by the KES agent match, like we do when
-      -- the key is provided in a file on the command line
-      KESAgentSocketPath socketFile -> do
-        OperationalCertificate _ vkey <- firstExceptT FileError $ newExceptT $ readFileTextEnvelope $ File opCertFile
-        pure (PraosCredentialsAgent socketFile, vkey)
-
-    return [mkPraosLeaderCredentials credentialsSource vkey vrfSKey]
-
--- But not OK to supply some of the files without the others.
-readLeaderCredentialsSingleton ProtocolFilepaths {shelleyCertFile = Nothing} =
-     left OCertNotSpecified
-readLeaderCredentialsSingleton ProtocolFilepaths {shelleyVRFFile = Nothing} =
-     left VRFKeyNotSpecified
-readLeaderCredentialsSingleton ProtocolFilepaths {shelleyKESSource = Nothing} =
-     left KESKeyNotSpecified
+  _
+  ProtocolFilepaths
+    { shelleyCertFile = Nothing
+    , shelleyVRFFile = Nothing
+    , shelleyKESSource = Nothing
+    } = pure []
+readLeaderCredentialsSingleton
+  expectedBinding
+  ProtocolFilepaths
+    { shelleyCertFile = Just opCertFile
+    , shelleyVRFFile = Just vrfFile
+    , shelleyKESSource = Just kesSource
+    } = do
+      vrfSKey <-
+        firstExceptT FileError (newExceptT $ readFileTextEnvelope (File vrfFile))
+      (credentialsSource, vkey, deviceBacked) <- case kesSource of
+        KESKeyFilePath kesFile -> do
+          (OperationalCertificate opCert vkey, KesSigningKey kesKey) <-
+            opCertKesKeyCheck (File kesFile) (File opCertFile)
+          pure (PraosCredentialsUnsound opCert kesKey, vkey, False)
+        KESAgentSocketPath socketFile -> do
+          OperationalCertificate _ vkey <-
+            firstExceptT FileError $ newExceptT $ readFileTextEnvelope $ File opCertFile
+          pure (PraosCredentialsAgent socketFile, vkey, False)
+        KESForgeConfigPath configFile -> do
+          opCertEnvelope <- readEnvelopeFile opCertFile
+          OperationalCertificate opCert vkey <-
+            parseEnvelope (opCertEnvelope, opCertFile)
+          config <- loadKesForgeConfig configFile
+          validateForgePool expectedBinding configFile vkey config
+          pure
+            ( PraosCredentialsExternal opCert (certificateDigest opCertEnvelope) $ kesForgeConnection config
+            , vkey
+            , True
+            )
+      pure
+        [ LoadedCredential
+            { loadedPoolId = poolIdentity vkey
+            , loadedIsDeviceBacked = deviceBacked
+            , loadedCredential = mkPraosLeaderCredentials credentialsSource vkey vrfSKey
+            }
+        ]
+readLeaderCredentialsSingleton _ ProtocolFilepaths {shelleyCertFile = Nothing} =
+  left OCertNotSpecified
+readLeaderCredentialsSingleton _ ProtocolFilepaths {shelleyVRFFile = Nothing} =
+  left VRFKeyNotSpecified
+readLeaderCredentialsSingleton _ ProtocolFilepaths {shelleyKESSource = Nothing} =
+  left KESKeyNotSpecified
 
 opCertKesKeyCheck
   :: File () In
@@ -222,55 +283,120 @@ opCertKesKeyCheck kesFile certFile = do
     firstExceptT FileError (newExceptT $ readFileTextEnvelope certFile)
   kesSKey <-
     firstExceptT FileError (newExceptT $ readFileTextEnvelope kesFile)
-  let opCertSpecifiedKesKeyhash = verificationKeyHash $ getHotKey opCert
-      suppliedKesKeyHash = verificationKeyHash $ getVerificationKey kesSKey
-  -- Specified KES key in operational certificate should match the one
-  -- supplied to the node.
-  if suppliedKesKeyHash /= opCertSpecifiedKesKeyhash
-  then left $ MismatchedKesKey (unFile kesFile) (unFile certFile)
-  else return (opCert, kesSKey)
+  hoistEither $ validateKesKeyBinding (unFile kesFile) (unFile certFile) opCert kesSKey
+  return (opCert, kesSKey)
 
-data ShelleyCredentials
-  = ShelleyCredentials
-    { scCert :: (TextEnvelope, FilePath)
-    , scVrf  :: (TextEnvelope, FilePath)
-    , scKes  :: (TextEnvelope, FilePath)
-    }
+-- | Apply the same certificate/key binding policy to singleton and bulk keys.
+-- Locations are filenames for singleton input and indexed fields for bulk input.
+validateKesKeyBinding
+  :: FilePath
+  -> FilePath
+  -> OperationalCertificate
+  -> SigningKey KesKey
+  -> Either PraosLeaderCredentialsError ()
+validateKesKeyBinding kesLocation certLocation opCert kesSKey =
+  if verificationKeyHash (getVerificationKey kesSKey) == verificationKeyHash (getHotKey opCert)
+    then Right ()
+    else Left $ MismatchedKesKey kesLocation certLocation
 
 readLeaderCredentialsBulk
-  :: ProtocolFilepaths
-  -> ExceptT PraosLeaderCredentialsError IO [ShelleyLeaderCredentials StandardCrypto]
-readLeaderCredentialsBulk ProtocolFilepaths { shelleyBulkCredsFile = mfp } =
-  mapM parseShelleyCredentials =<< readBulkFile mfp
+  :: Maybe KesForge.NetworkBinding
+  -> ProtocolFilepaths
+  -> ExceptT PraosLeaderCredentialsError IO [LoadedCredential]
+readLeaderCredentialsBulk _ ProtocolFilepaths{shelleyBulkCredsFile = Nothing} = pure []
+readLeaderCredentialsBulk expectedBinding ProtocolFilepaths{shelleyBulkCredsFile = Just file} = do
+  content <- handleIOExceptT (CredentialsReadError file) $ BS.readFile file
+  credentials <- firstExceptT (EnvelopeParseError file) $ hoistEither $
+    decodeBulkCredentials file content
+  mapM (uncurry $ parseCredential file) $ zip [0 :: Int ..] credentials
  where
-   parseShelleyCredentials
-     :: ShelleyCredentials
-     -> ExceptT PraosLeaderCredentialsError IO (ShelleyLeaderCredentials StandardCrypto)
-   parseShelleyCredentials ShelleyCredentials { scCert, scVrf, scKes } = do
-     OperationalCertificate opCert vkey <- parseEnvelope scCert
-     KesSigningKey kesKey <- parseEnvelope scKes
-     let credentialsSource = PraosCredentialsUnsound opCert kesKey
-     vrfSKey <- parseEnvelope scVrf
-     pure $ mkPraosLeaderCredentials credentialsSource vkey vrfSKey
+  parseCredential bulkFile index BulkCredential
+    { bulkOperationalCertificate
+    , bulkVrfSigningKey
+    , bulkKESSource
+    } = do
+      let location fieldName = bulkFile <> "[" <> show index <> "]." <> fieldName
+      operationalCertificate@(OperationalCertificate opCert vkey) <-
+        parseEnvelope (bulkOperationalCertificate, location "operationalCertificate")
+      vrfSKey <- parseEnvelope (bulkVrfSigningKey, location "vrfSigningKey")
+      (source, deviceBacked) <- case bulkKESSource of
+        BulkKESFile envelope -> do
+          kesSKey@(KesSigningKey kesKey) <- parseEnvelope (envelope, location "kesSource.signingKey")
+          hoistEither $
+            validateKesKeyBinding
+              (location "kesSource.signingKey")
+              (location "operationalCertificate")
+              operationalCertificate
+              kesSKey
+          pure (PraosCredentialsUnsound opCert kesKey, False)
+        BulkKESForge relativeConfigFile -> do
+          let configFile = resolveRelative bulkFile relativeConfigFile
+          config <- loadKesForgeConfig configFile
+          validateForgePool expectedBinding configFile vkey config
+          pure
+            ( PraosCredentialsExternal opCert (certificateDigest bulkOperationalCertificate) $ kesForgeConnection config
+            , True
+            )
+      pure LoadedCredential
+        { loadedPoolId = poolIdentity vkey
+        , loadedIsDeviceBacked = deviceBacked
+        , loadedCredential = mkPraosLeaderCredentials source vkey vrfSKey
+        }
 
-   readBulkFile
-     :: Maybe FilePath
-     -> ExceptT PraosLeaderCredentialsError IO [ShelleyCredentials]
-   readBulkFile Nothing = pure []
-   readBulkFile (Just fp) = do
-     content <- handleIOExceptT (CredentialsReadError fp) $
-                  BS.readFile fp
-     envelopes <- firstExceptT (EnvelopeParseError fp) $ hoistEither $
-                    Aeson.eitherDecodeStrict' content
-     pure $ uncurry mkCredentials <$> zip [0..] envelopes
-    where
-      mkCredentials :: Int -> (TextEnvelope, TextEnvelope, TextEnvelope)
-                    -> ShelleyCredentials
-      mkCredentials ix (teCert, teVrf, teKes) =
-       let loc ty = fp <> "." <> show ix <> ty
-       in ShelleyCredentials (teCert, loc "cert")
-                             (teVrf,  loc "vrf")
-                             (teKes,  loc "kes")
+readEnvelopeFile
+  :: FilePath
+  -> ExceptT PraosLeaderCredentialsError IO TextEnvelope
+readEnvelopeFile file = do
+  content <- handleIOExceptT (CredentialsReadError file) $ BS.readFile file
+  firstExceptT (EnvelopeParseError file) $ hoistEither $
+    Aeson.eitherDecodeStrict' content
+
+certificateDigest :: TextEnvelope -> BS.ByteString
+certificateDigest =
+  Crypto.hashToBytes
+    . (Crypto.hashWith id :: BS.ByteString -> Crypto.Hash Crypto.SHA256 BS.ByteString)
+    . teRawCBOR
+
+loadKesForgeConfig
+  :: FilePath
+  -> ExceptT PraosLeaderCredentialsError IO KesForgePoolConfig
+loadKesForgeConfig file = do
+  content <- handleIOExceptT (CredentialsReadError file) $ BS.readFile file
+  firstExceptT (KesForgeConfigParseError file) $ hoistEither $
+    decodeKesForgePoolConfig file content
+
+validateForgePool
+  :: Maybe KesForge.NetworkBinding
+  -> FilePath
+  -> VerificationKey StakePoolKey
+  -> KesForgePoolConfig
+  -> ExceptT PraosLeaderCredentialsError IO ()
+validateForgePool expectedBinding file vkey config = do
+  unless (kesForgePoolId config == poolIdentity vkey) $
+    left $ KesForgePoolMismatch file
+  forM_ expectedBinding $ \expected ->
+    case networkBindingMismatch expected $ KesForge.networkBinding $ kesForgeConnection config of
+      Nothing -> pure ()
+      Just field -> left $ KesForgeNetworkMismatch file field
+
+networkBindingMismatch
+  :: KesForge.NetworkBinding
+  -> KesForge.NetworkBinding
+  -> Maybe String
+networkBindingMismatch expected actual
+  | KesForge.networkMagic actual /= KesForge.networkMagic expected = Just "networkMagic"
+  | KesForge.shelleyGenesisDigest actual /= KesForge.shelleyGenesisDigest expected = Just "shelleyGenesisDigest"
+  | KesForge.slotsPerKESPeriod actual /= KesForge.slotsPerKESPeriod expected = Just "slotsPerKesPeriod"
+  | KesForge.maxKESEvolutions actual /= KesForge.maxKESEvolutions expected = Just "maxKesEvolutions"
+  | otherwise = Nothing
+
+poolIdentity :: VerificationKey StakePoolKey -> BS.ByteString
+poolIdentity = serialiseToRawBytes . verificationKeyHash
+
+resolveRelative :: FilePath -> FilePath -> FilePath
+resolveRelative containing path
+  | isAbsolute path = normalise path
+  | otherwise = normalise $ takeDirectory containing </> path
 
 mkPraosLeaderCredentials ::
      PraosCredentialsSource StandardCrypto
@@ -348,6 +474,11 @@ data PraosLeaderCredentialsError =
        CredentialsReadError !FilePath !IOException
      | EnvelopeParseError !FilePath !String
      | FileError !(Api.FileError TextEnvelopeError)
+     | KesForgeConfigParseError !FilePath !String
+     | KesForgePoolMismatch !FilePath
+     | KesForgeNetworkMismatch !FilePath !String
+     | DuplicatePoolIdentity
+     | TooManyDeviceCredentials
 --TODO: pick a less generic constructor than FileError
 
      | OCertNotSpecified
@@ -369,6 +500,20 @@ instance Error PraosLeaderCredentialsError where
         "There was an error parsing a credentials envelope: "
      <> pshow fp <> " Error: " <> pshow err
 
+  prettyError (KesForgeConfigParseError fp err) =
+        "There was an error parsing a cardano-kes-forge connection file: "
+     <> pshow fp <> " Error: " <> pshow err
+  prettyError (KesForgePoolMismatch fp) =
+    "The pool identity in the cardano-kes-forge connection file does not match the operational certificate: "
+      <> pshow fp
+  prettyError (KesForgeNetworkMismatch fp field) =
+    "The " <> pshow field
+      <> " network binding in the cardano-kes-forge connection file does not match the Shelley genesis: "
+      <> pshow fp
+  prettyError DuplicatePoolIdentity =
+    "The configured forging credentials contain a duplicate stake pool identity"
+  prettyError TooManyDeviceCredentials =
+    "At most 32 cardano-kes-forge pool credentials may be configured"
   prettyError (FileError fileErr) = prettyError fileErr
   prettyError (MismatchedKesKey kesFp certFp) =
        "The KES key provided at: " <> pshow kesFp

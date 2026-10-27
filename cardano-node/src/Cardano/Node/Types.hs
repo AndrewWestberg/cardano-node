@@ -171,6 +171,7 @@ class AdjustFilePaths a where
 data KESSource
   = KESKeyFilePath FilePath
   | KESAgentSocketPath FilePath
+  | KESForgeConfigPath FilePath
   deriving (Eq, Show)
 
 data ProtocolFilepaths =

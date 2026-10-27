@@ -145,7 +145,7 @@ mkSomeConsensusProtocolCardano NodeByronProtocolConfiguration {
 
     shelleyLeaderCredentials <-
       firstExceptT CardanoProtocolInstantiationPraosLeaderCredentialsError $
-        Shelley.readLeaderCredentials files
+        Shelley.readLeaderCredentialsForGenesis shelleyGenesis shelleyGenesisHash files
 
     checkpointsMap <-
       firstExceptT CardanoProtocolInstantiationCheckpointsReadError $

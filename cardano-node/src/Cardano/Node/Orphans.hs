@@ -63,6 +63,8 @@ instance ToCBOR (PraosCredentialsSource StandardCrypto) where
      PraosCredentialsUnsound ocert kesKey -> toCBOR (ocert, kesKey)
      PraosCredentialsAgent _path ->
        error "PraosCredentialsAgent cannot be serialized to CBOR"
+     PraosCredentialsExternal _ _ _ ->
+       error "PraosCredentialsExternal cannot be serialized to CBOR"
 
 -- TODO(11.0): move to `ouroboros-consensus`
 instance FromCBOR (PraosCredentialsSource StandardCrypto) where
