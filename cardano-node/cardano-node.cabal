@@ -92,6 +92,7 @@ library
                         Cardano.Node.Protocol.Conway
                         Cardano.Node.Protocol.Dijkstra
                         Cardano.Node.Protocol.Shelley
+                        Cardano.Node.Protocol.Shelley.Credentials
                         Cardano.Node.Protocol.Types
                         Cardano.Node.Queries
                         Cardano.Node.Run
@@ -263,6 +264,7 @@ test-suite cardano-node-test
                       , yaml
 
   other-modules:        Test.Cardano.Config.Mainnet
+                        Test.Cardano.Node.BulkCredentials
                         Test.Cardano.Node.FilePermissions
                         Test.Cardano.Node.Gen
                         Test.Cardano.Node.Json

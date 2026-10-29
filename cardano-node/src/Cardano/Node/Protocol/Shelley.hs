@@ -33,6 +33,7 @@ import           Cardano.Ledger.BaseTypes (ProtVer (..), natVersion)
 import           Cardano.Ledger.Keys (coerceKeyRole)
 import qualified Cardano.Ledger.Shelley.Genesis as Shelley
 import           Cardano.Node.Orphans ()
+import           Cardano.Node.Protocol.Shelley.Credentials
 import           Cardano.Node.Protocol.Types
 import           Cardano.Node.Types
 import qualified Ouroboros.Consensus.Cardano as Consensus
@@ -45,9 +46,7 @@ import           Ouroboros.Consensus.Shelley.Node (Nonce (..), ProtocolParamsShe
 import           Control.Exception (IOException)
 import           Control.Monad
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Types as AesonTypes
 import qualified Data.ByteString as BS
-import           Data.Foldable (toList)
 import qualified Data.Text as T
 import           System.Directory (getFileSize)
 import           System.FilePath (takeDirectory)
@@ -237,9 +236,13 @@ data ShelleyCredentials
   = ShelleyCredentials
     { scCert :: (TextEnvelope, FilePath)
     , scVrf  :: (TextEnvelope, FilePath)
-    , scKes  :: (TextEnvelope, FilePath)
+    , scKes  :: ShelleyKESCredentials
     , scBls  :: [(TextEnvelope, FilePath)]
     }
+
+data ShelleyKESCredentials
+  = ShelleyKESFile (TextEnvelope, FilePath)
+  | ShelleyKESAgent FilePath
 
 readLeaderCredentialsBulk
   :: ProtocolFilepaths
@@ -252,27 +255,16 @@ readLeaderCredentialsBulk ProtocolFilepaths { shelleyBulkCredsFile = mfp } =
      -> ExceptT PraosLeaderCredentialsError IO (ShelleyLeaderCredentials StandardCrypto)
    parseShelleyCredentials ShelleyCredentials { scCert, scVrf, scKes, scBls } = do
      OperationalCertificate opCert vkey <- parseEnvelope scCert
-     KesSigningKey kesKey <- parseEnvelope scKes
-     let credentialsSource = PraosCredentialsUnsound opCert kesKey
+     credentialsSource <- case scKes of
+       ShelleyKESFile kes -> do
+         KesSigningKey kesKey <- parseEnvelope kes
+         pure $ PraosCredentialsUnsound opCert kesKey
+       ShelleyKESAgent socketPath ->
+         pure $ PraosCredentialsAgent socketPath
      vrfSKey <- parseEnvelope scVrf
      blsKeys <- traverse parseEnvelope scBls
      pure $ mkPraosLeaderCredentials credentialsSource vkey vrfSKey blsKeys
 
-   parseBulkEntry
-     :: Aeson.Value
-     -> AesonTypes.Parser (TextEnvelope, TextEnvelope, TextEnvelope, [TextEnvelope])
-   parseBulkEntry = Aeson.withArray "bulk credential entry" $ \entry ->
-     case toList entry of
-       [cert, vrf, kes] ->
-         (,,,) <$> Aeson.parseJSON cert <*> Aeson.parseJSON vrf
-               <*> Aeson.parseJSON kes <*> pure []
-       [cert, vrf, kes, bls] ->
-         (,,,) <$> Aeson.parseJSON cert <*> Aeson.parseJSON vrf
-               <*> Aeson.parseJSON kes <*> case bls of
-                 Aeson.Null -> pure []
-                 Aeson.Array _ -> Aeson.parseJSON bls
-                 _ -> (:[]) <$> Aeson.parseJSON bls
-       _ -> fail "Expected a bulk credential entry with 3 or 4 elements"
 
    readBulkFile
      :: Maybe FilePath
@@ -281,21 +273,27 @@ readLeaderCredentialsBulk ProtocolFilepaths { shelleyBulkCredsFile = mfp } =
    readBulkFile (Just fp) = do
      content <- handleIOExceptT (CredentialsReadError fp) $
                   BS.readFile fp
-     values <- firstExceptT (EnvelopeParseError fp) $ hoistEither
-                 (Aeson.eitherDecodeStrict' content :: Either String [Aeson.Value])
-     envelopes <- firstExceptT (EnvelopeParseError fp) $ hoistEither $
-                    AesonTypes.parseEither (traverse parseBulkEntry) values
-     pure $ uncurry mkCredentials <$> zip [0..] envelopes
+     credentials <- firstExceptT (EnvelopeParseError fp) $ hoistEither $
+                      decodeBulkCredentials fp content
+     pure $ uncurry mkCredentials <$> zip [0..] credentials
     where
-      mkCredentials :: Int -> (TextEnvelope, TextEnvelope, TextEnvelope, [TextEnvelope])
-                    -> ShelleyCredentials
-      mkCredentials ix (teCert, teVrf, teKes, teBls) =
-       let loc ty = fp <> "." <> show ix <> ty
-       in ShelleyCredentials (teCert, loc "cert")
-                             (teVrf,  loc "vrf")
-                             (teKes,  loc "kes")
-                             [(te, loc ("bls." <> show keyIndex))
-                             | (keyIndex, te) <- zip [0 :: Int ..] teBls]
+      mkCredentials :: Int -> BulkCredential -> ShelleyCredentials
+      mkCredentials ix BulkCredential
+        { bulkOperationalCertificate
+        , bulkVrfSigningKey
+        , bulkKesSource
+        , bulkBlsSigningKeys
+        } =
+        let loc ty = fp <> "." <> show ix <> ty
+            kes = case bulkKesSource of
+              BulkKESFile envelope -> ShelleyKESFile (envelope, loc "kes")
+              BulkKESAgent socketPath -> ShelleyKESAgent socketPath
+         in ShelleyCredentials
+              (bulkOperationalCertificate, loc "cert")
+              (bulkVrfSigningKey, loc "vrf")
+              kes
+              [(envelope, loc ("bls." <> show keyIndex))
+              | (keyIndex, envelope) <- zip [0 :: Int ..] bulkBlsSigningKeys]
 
 mkPraosLeaderCredentials ::
      PraosCredentialsSource StandardCrypto
